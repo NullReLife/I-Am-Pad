@@ -1,91 +1,95 @@
 package com.houvven.impad
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.content.Context
-import android.content.SharedPreferences
-import android.os.Build
 import android.os.Process
-import androidx.core.content.edit
+import android.util.Log
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.highcapable.kavaref.extension.hasClass
 import com.highcapable.kavaref.extension.toClass
-import com.highcapable.yukihookapi.YukiHookAPI
-import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
-import com.highcapable.yukihookapi.hook.log.YLog
-import com.highcapable.yukihookapi.hook.param.PackageParam
-import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
+import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.XposedModuleInterface
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.wrap.DexMethod
 import java.io.File
-import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import kotlin.coroutines.Continuation
 
-@InjectYukiHookWithXposed
-object HookEntrance : IYukiHookXposedInit {
+class HookEntrance : XposedModule() {
 
-    private val SystemPropertiesClass = "android.os.SystemProperties".toClass()
+    companion object {
+        private const val TAG = BuildConfig.APPLICATION_ID
+        private const val DEXKIT_PREFS_NAME = "IAMPAD_dexkit"
+        private const val QQ_TARGET_MODEL = "23046RP50C"
+        private const val QQ_BUGLY_PREFS_NAME = "BUGLY_COMMON_VALUES"
+        private const val QQ_PANDORA_CACHE_PATH = "files/mmkv/Pandora"
+        private const val QQ_PANDORA_CRC_PATH = "files/mmkv/Pandora.crc"
+    }
 
-    private val Context.dexkitPrefs
-        get() = getSharedPreferences("IAMPAD_dexkit", Context.MODE_PRIVATE)
+    private var methodCache: DexMethodCache? = null
 
     @Suppress("SpellCheckingInspection")
-    private val customWeWorkPackages = arrayOf(
+    private val customWeWorkPackages = setOf(
         "com.airchina.wecompro",
         "com.zwfw.YueZhengYi",
         "com.cscec.portal",
         "cn.powerchina.pact"
     )
 
-    private lateinit var dexkit: DexKitBridge
+    private data class PackageRoute(
+        val match: (XposedModuleInterface.PackageReadyParam) -> Boolean,
+        val handle: () -> Unit
+    )
 
-    override fun onInit() = YukiHookAPI.configs {
-        isDebug = BuildConfig.DEBUG
-        debugLog {
-            tag = BuildConfig.APPLICATION_ID
-        }
+    private val packageRoutes = listOf(
+        PackageRoute(
+            match = { it.packageName.contains("com.tencent.mobileqq") },
+            handle = ::processQQ
+        ),
+        PackageRoute(
+            match = { it.packageName.contains("com.tencent.mm") },
+            handle = ::processWeChat
+        ),
+        PackageRoute(
+            match = { it.packageName.contains("com.tencent.wework") },
+            handle = ::processWeWork
+        ),
+        PackageRoute(
+            match = { it.packageName.contains("com.xingin.xhs") },
+            handle = ::processXhs
+        ),
+        PackageRoute(
+            match = ::isDingTalk,
+            handle = ::processDingTalk
+        ),
+        PackageRoute(
+            match = ::isCustomWeWork,
+            handle = ::processCustomWeWork
+        )
+    )
+
+    override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
+        packageRoutes.firstOrNull { it.match(param) }?.handle?.invoke()
     }
 
-    override fun onHook() = YukiHookAPI.encase {
-        loadApp {
-            when {
-                packageName.contains("com.tencent.mobileqq") -> processQQ()
-                packageName.contains("com.tencent.mm") -> processWeChat()
-                packageName.contains("com.tencent.wework") -> processWeWork()
-                isDingTalk() -> processDingTalk()
-                isCustomWeWork() -> processCustomWeWork()
-                packageName.contains("com.xingin.xhs") -> processXhs()
-            }
-        }
-    }
-
-    private fun PackageParam.processQQ() {
-        val targetModel = "23046RP50C"
-        simulateTabletModel("Xiaomi", targetModel)
+    private fun processQQ() {
+        simulateTabletModel("Xiaomi", QQ_TARGET_MODEL)
         simulateTabletProperties()
-
-        onAppLifecycle {
-            onCreate {
-                val preferences = getSharedPreferences("BUGLY_COMMON_VALUES", Context.MODE_PRIVATE)
-                val storedModel = preferences.getString("model", targetModel)
-                YLog.debug("QQ got default device model: $storedModel")
-                if (storedModel != targetModel) {
-                    YLog.debug("clear qq cache.")
-                    File("${appInfo.dataDir}/files/mmkv/Pandora").deleteRecursively()
-                    File("${appInfo.dataDir}/files/mmkv/Pandora.crc").deleteRecursively()
-                    Process.killProcess(Process.myPid())
-                }
+        Application::class.java.resolve().firstMethod {
+            name("onCreate")
+        }.self.let { method ->
+            hook(method).intercept { chain ->
+                val context =
+                    (chain.args.firstOrNull() as? Context) ?: (chain.thisObject as? Context)
+                context?.let(::resetQQModelCacheIfNeeded)
+                chain.proceed()
             }
         }
     }
 
-    private fun PackageParam.processWeChat() = afterApplicationAttach { context ->
-        val prefs = context.dexkitPrefs
-        val classLoader = context.classLoader
-
-        findOrLoadMethod(prefs, "checkLoginAsPad_method", classLoader) {
+    private fun processWeChat() = afterApplicationAttach { context ->
+        hookDexMethodToReturn("checkLoginAsPad_method", context, true) {
             findMethod {
                 excludePackages("android", "androidx", "com")
                 matcher {
@@ -102,9 +106,9 @@ object HookEntrance : IYukiHookXposedInit {
                     )
                 }
             }.single().toDexMethod()
-        }.hook().replaceToTrue()
+        }
 
-        findOrLoadMethod(prefs, "isFoldableDevice_method", classLoader) {
+        hookDexMethodToReturn("isFoldableDevice_method", context, true) {
             findMethod {
                 searchPackages("com.tencent.mm.ui")
                 matcher {
@@ -114,26 +118,24 @@ object HookEntrance : IYukiHookXposedInit {
                     returnType(Boolean::class.javaPrimitiveType!!)
                 }
             }.single().toDexMethod()
-        }.hook().replaceToTrue()
+        }
     }
 
-    private fun PackageParam.processWeWork() = afterApplicationAttach { context ->
-        val classLoader = context.classLoader
-        "com.tencent.wework.foundation.impl.WeworkServiceImpl".toClass(classLoader)
-            .resolve()
-            .method {
-                name { it.startsWith("isAndroidPad") }
-                returnType(Boolean::class)
-            }
-            .hookAll().replaceToTrue()
+    private fun processWeWork() = afterApplicationAttach { context ->
+        hookAllToReturn(
+            methods = "com.tencent.wework.foundation.impl.WeworkServiceImpl"
+                .toClass(context.classLoader)
+                .resolve()
+                .method {
+                    name { it.startsWith("isAndroidPad") }
+                    returnType(Boolean::class)
+                }.map { it.self },
+            value = true
+        )
     }
 
-    private fun PackageParam.processDingTalk() = afterApplicationAttach { context ->
-        val classLoader = context.classLoader
-        val prefs = context.dexkitPrefs
-        val cacheKey = "isMultiLoginFoldableDevice_method"
-
-        findOrLoadMethod(prefs, cacheKey, classLoader) {
+    private fun processDingTalk() = afterApplicationAttach { context ->
+        hookDexMethodToReturn("isMultiLoginFoldableDevice_method", context, true) {
             findMethod {
                 searchPackages("com.alibaba.android.dingtalkbase.foldable")
                 matcher {
@@ -144,16 +146,11 @@ object HookEntrance : IYukiHookXposedInit {
                     usingStrings("isMultiLoginFoldableDevice")
                 }
             }.single().toDexMethod()
-        }.hook().replaceToTrue()
+        }
     }
 
-    @SuppressLint("DuplicateCreateDexKit")
-    private fun PackageParam.processCustomWeWork() = afterApplicationAttach { context ->
-        val classLoader = context.classLoader
-        val prefs = context.dexkitPrefs
-        val cacheKey = "isPadJudge_method"
-
-        findOrLoadMethod(prefs, cacheKey, classLoader) {
+    private fun processCustomWeWork() = afterApplicationAttach { context ->
+        hookDexMethodToReturn("isPadJudge_method", context, true) {
             findMethod {
                 matcher {
                     declaredClass("com.tencent.wework.common.utils.WwUtil")
@@ -167,90 +164,51 @@ object HookEntrance : IYukiHookXposedInit {
                     )
                 }
             }.single().toDexMethod()
-        }.hook().replaceToTrue()
+        }
     }
 
-    private fun PackageParam.processXhs() {
+    private fun processXhs() {
         "com.xingin.adaptation.device.DeviceInfoContainer".toClass().resolve().run {
-            method { name("isPad") }.hookAll().replaceToTrue()
-            method { name("getSavedDeviceType") }.hookAll().replaceTo("pad")
+            hookAllToReturn(method { name("isPad") }.map { it.self }, true)
+            hookAllToReturn(method { name("getSavedDeviceType") }.map { it.self }, "pad")
         }
     }
 
-    private fun simulateTabletModel(
-        brand: String,
-        model: String,
-        manufacturer: String = brand
-    ) {
-        Build::class.resolve().run {
-            firstField { name("MANUFACTURER") }.set(manufacturer)
-            firstField { name("BRAND") }.set(brand)
-            firstField { name("MODEL") }.set(model)
-        }
-    }
-
-    private fun PackageParam.simulateTabletProperties() {
-        SystemPropertiesClass.resolve().firstMethod {
-            name("get")
-            returnType(String::class)
-        }.hook().before {
-            if (args[0] == "ro.build.characteristics") {
-                result = "tablet"
-            }
-        }
-    }
-
-    private fun findOrLoadMethod(
-        prefs: SharedPreferences,
+    private fun hookDexMethodToReturn(
         cacheKey: String,
-        classLoader: ClassLoader,
+        context: Context,
+        value: Any?,
         finder: DexKitBridge.() -> DexMethod
-    ): Method {
-        return try {
-            DexMethod(prefs.getString(cacheKey, "")!!)
-                .getMethodInstance(classLoader).also {
-                    YLog.debug("Loaded cached method [$cacheKey]: $it")
-                }
-        } catch (t: Throwable) {
-            if (t !is NoSuchMethodException && t !is IllegalAccessError) throw t
-            if (!::dexkit.isInitialized) {
-                System.loadLibrary("dexkit")
-                dexkit = DexKitBridge.create(classLoader, true)
-            }
-            dexkit.finder().run {
-                prefs.edit { putString(cacheKey, serialize()) }
-                getMethodInstance(classLoader).also {
-                    YLog.debug("Found new method [$cacheKey]: $it")
-                }
-            }
-        }
+    ) {
+        val classLoader = context.classLoader
+        hookToReturn(requireMethodCache(context).findOrLoad(cacheKey, classLoader, finder), value)
     }
 
-    private fun PackageParam.isCustomWeWork() =
-        packageName in customWeWorkPackages || appClassLoader?.hasClass("com.tencent.wework.common.utils.WwUtil") == true
-
-    private fun PackageParam.isDingTalk(): Boolean {
-        return packageName == "com.alibaba.android.rimet" || appClassLoader?.hasClass("com.alibaba.android.rimet.LauncherApplication") == true
+    private fun requireMethodCache(context: Context): DexMethodCache {
+        methodCache?.let { return it }
+        return DexMethodCache(
+            module = this,
+            prefs = context.getSharedPreferences(DEXKIT_PREFS_NAME, Context.MODE_PRIVATE)
+        ).also { methodCache = it }
     }
 
-    private fun PackageParam.afterApplicationAttach(action: (Context) -> Unit) {
-        val tinkerApplicationClass =
-            "com.tencent.tinker.loader.app.TinkerApplication".toClassOrNull()
+    private fun resetQQModelCacheIfNeeded(context: Context) {
+        val prefs = context.getSharedPreferences(QQ_BUGLY_PREFS_NAME, Context.MODE_PRIVATE)
+        val storedMode = prefs.getString("model", QQ_TARGET_MODEL)
+        if (storedMode == QQ_TARGET_MODEL) return
 
-        val actionWrapper: (Context) -> Unit = { context ->
-            runCatching { action(context) }.onFailure {
-                YLog.error("Failed to execute afterApplicationAttach hook", it)
-            }
-        }
+        log(Log.INFO, TAG, "QQ stored model not match, clear cache")
+        val appDataDir = context.applicationInfo.dataDir
+        File(appDataDir, QQ_PANDORA_CACHE_PATH).deleteRecursively()
+        File(appDataDir, QQ_PANDORA_CRC_PATH).deleteRecursively()
+        Process.killProcess(Process.myPid())
+    }
 
-        if (tinkerApplicationClass != null) {
-            tinkerApplicationClass.resolve()
-                .firstMethod { name("onBaseContextAttached") }.hook()
-                .after { actionWrapper(args[0] as Context) }
-        } else {
-            Application::class.resolve()
-                .firstMethod { name("onCreate") }.hook()
-                .before { actionWrapper(instance()) }
-        }
+    private fun isCustomWeWork(prp: XposedModuleInterface.PackageReadyParam): Boolean = prp.run {
+        packageName in customWeWorkPackages || classLoader.hasClass("com.tencent.wework.common.utils.WwUtil")
+    }
+
+    private fun isDingTalk(prp: XposedModuleInterface.PackageReadyParam): Boolean = prp.run {
+        packageName == "com.alibaba.android.rimet" || classLoader.hasClass("com.alibaba.android.rimet.LauncherApplication")
     }
 }

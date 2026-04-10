@@ -4,7 +4,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.ksp)
 }
 
 android {
@@ -13,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = namespace
-        minSdk = 24
+        minSdk = 27
         targetSdk = 36
         versionCode = 11
         versionName = "1.1.0"
@@ -58,11 +57,8 @@ kotlin {
 }
 
 dependencies {
-    implementation(libs.androidx.appcompat)
-    implementation(libs.yukihookapi)
     implementation(libs.dexkit)
     implementation(libs.kavaref.core)
     implementation(libs.kavaref.extension)
-    compileOnly(libs.xposed.api)
-    ksp(libs.yukihookapi.ksp)
+    compileOnly(libs.libxposed.api)
 }
