@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [ "master" ]
   workflow_dispatch:
+    inputs:
+      enable_signing:
+        description: '是否签名 APK'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -28,6 +34,7 @@ jobs:
       - uses: ilharp/sign-android-release@v2
         name: Sign app APK
         id: sign_app
+        if: ${{ github.event.inputs.enable_signing == 'true' }}
         with:
           releaseDir: app/build/outputs/apk/release
           signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
@@ -37,6 +44,7 @@ jobs:
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
+        if: ${{ github.event.inputs.enable_signing == 'true' }}
         with:
           name: i.am.pad-release apk
           path: app/build/outputs/apk/release/*signed.apk
