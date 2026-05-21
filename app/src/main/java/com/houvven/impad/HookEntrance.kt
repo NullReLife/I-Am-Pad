@@ -21,7 +21,7 @@ class HookEntrance : XposedModule() {
     companion object {
         private const val TAG = BuildConfig.APPLICATION_ID
         private const val DEXKIT_PREFS_NAME = "IAMPAD_dexkit"
-        private const val QQ_TARGET_MODEL = "23046RP50C"
+        private const val QQ_TARGET_MODEL = "2410CRP4CC"
         private const val QQ_BUGLY_PREFS_NAME = "BUGLY_COMMON_VALUES"
         private const val QQ_PANDORA_CACHE_PATH = "files/mmkv/Pandora"
         private const val QQ_PANDORA_CRC_PATH = "files/mmkv/Pandora.crc"
