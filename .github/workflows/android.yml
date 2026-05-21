@@ -13,9 +13,12 @@ on:
         required: true
         type: choice
         options:
-          - 'default'    # 使用默认/debug签名
+          - 'default'    # 使用 debug 签名构建 release
           - 'custom'     # 使用自己的签名密钥
         default: 'default'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -35,11 +38,13 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
-      - name: Build Release APK (with default signing)
+      # 使用默认(debug)签名构建 release
+      - name: Build Release APK with default signing
         if: ${{ github.event.inputs.signing_type != 'custom' }}
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease -Pandroid.injected.signing.store.file=$ANDROID_HOME/debug.keystore -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androiddebugkey -Pandroid.injected.signing.key.password=android
 
-      - name: Build Release APK (unsigned for custom signing)
+      # 不使用签名构建 release（用于后续自定义签名）
+      - name: Build Release APK (unsigned)
         if: ${{ github.event.inputs.signing_type == 'custom' }}
         run: ./gradlew assembleRelease
 
