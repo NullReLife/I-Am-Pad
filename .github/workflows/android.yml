@@ -8,11 +8,14 @@ on:
     branches: [ "master" ]
   workflow_dispatch:
     inputs:
-      enable_signing:
-        description: '是否签名 APK'
+      signing_type:
+        description: '签名方式'
         required: true
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - 'default'    # 使用默认/debug签名
+          - 'custom'     # 使用自己的签名密钥
+        default: 'default'
 
 jobs:
   build:
@@ -28,13 +31,21 @@ jobs:
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-      - name: Build with Gradle
-        run: ./gradlew assemble
 
-      - uses: ilharp/sign-android-release@v2
-        name: Sign app APK
-        id: sign_app
-        if: ${{ github.event.inputs.enable_signing == 'true' }}
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Build Release APK (with default signing)
+        if: ${{ github.event.inputs.signing_type != 'custom' }}
+        run: ./gradlew assembleRelease
+
+      - name: Build Release APK (unsigned for custom signing)
+        if: ${{ github.event.inputs.signing_type == 'custom' }}
+        run: ./gradlew assembleRelease
+
+      - name: Sign Release APK with custom key
+        if: ${{ github.event.inputs.signing_type == 'custom' }}
+        uses: ilharp/sign-android-release@v2
         with:
           releaseDir: app/build/outputs/apk/release
           signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
@@ -42,15 +53,22 @@ jobs:
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
-      - name: Upload release artifacts
+      - name: Upload release APK (default signing)
+        if: ${{ github.event.inputs.signing_type != 'custom' }}
         uses: actions/upload-artifact@v4
-        if: ${{ github.event.inputs.enable_signing == 'true' }}
         with:
-          name: i.am.pad-release apk
+          name: i.am.pad-release
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Upload release APK (custom signed)
+        if: ${{ github.event.inputs.signing_type == 'custom' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: i.am.pad-release-signed
           path: app/build/outputs/apk/release/*signed.apk
 
-      - name: Upload debug artifacts
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: i.am.pad-debug apk
+          name: i.am.pad-debug
           path: app/build/outputs/apk/debug/*.apk
